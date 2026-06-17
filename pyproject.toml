@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sap-voice-reconstruction"
+version = "0.0.0"
+description = "Consolidated implementation for atypical-speech voice reconstruction in the SAP setting (Phase 1: VTN-style direct VC + cascaded ASR->TTS)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "TBD" }
+dependencies = []
+
+[project.optional-dependencies]
+# Filled in per model family as Issues progress; kept empty in the Issue 1 scaffold.
+dev = []
+
+[tool.setuptools.packages.find]
+include = ["sap*"]

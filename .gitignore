@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# Data + derived artifacts (kept out of git; dir structure preserved via .gitkeep)
+data/foundation/manifests/*
+data/foundation/lhotse/*
+data/foundation/synthetic_pairs/*
+data/derived/vc/*
+data/derived/cascaded/*
+data/derived/valle/*
+data/splits/*
+!**/.gitkeep
+
+# Experiment outputs / checkpoints / logs (default to /scratch/aa.mohan on the cluster)
+experiments/
+checkpoints/
+*.ckpt
+*.pt
+logs/
+*.log
+
+# Audio / large binaries
+*.wav
+*.flac
+*.npy
+*.npz
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
