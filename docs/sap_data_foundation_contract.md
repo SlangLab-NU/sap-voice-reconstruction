@@ -10,6 +10,12 @@ changes, re-verify against it. Paths below are the **current local layout** — 
 code must treat all roots as configurable (see CLAUDE.md cluster path conventions), not
 hardcode `/projects/aanchan/...`.
 
+**Provenance.** This contract was verified against `SlangLab-NU/sap-data-preparation`
+commit `9212229` (`main`, 2026-05-19, "Add docs folder with prefix mode constraints and
+WER proxy explainers"). The two repos stay decoupled — we consume artifacts, not source —
+so when Step 6 manifests are generated, record the producing `sap-data-preparation` commit
+alongside them (a provenance field/sidecar) and re-verify this note if that commit differs.
+
 ---
 
 ## Pipeline at a glance
