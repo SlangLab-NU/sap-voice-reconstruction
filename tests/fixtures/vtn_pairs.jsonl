@@ -1,0 +1,3 @@
+{"transcript": "Turn on heat.", "speaker_id": "9fa04401", "etiology": "Parkinson's Disease", "source": "audio/pair1_turn_on_heat_9fa04401_ORIG16k.wav", "target": "audio/pair1_turn_on_heat_9fa04401_SYNTH24k.wav"}
+{"transcript": "What's the time?", "speaker_id": "7fee5dfd", "etiology": "Parkinson's Disease", "source": "audio/pair2_what_s_the_time_7fee5dfd_ORIG16k.wav", "target": "audio/pair2_what_s_the_time_7fee5dfd_SYNTH24k.wav"}
+{"transcript": "Make it warmer.", "speaker_id": "19afb5a2", "etiology": "Parkinson's Disease", "source": "audio/pair3_make_it_warmer_19afb5a2_ORIG16k.wav", "target": "audio/pair3_make_it_warmer_19afb5a2_SYNTH24k.wav"}

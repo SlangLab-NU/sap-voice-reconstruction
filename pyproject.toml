@@ -7,13 +7,21 @@ name = "sap-voice-reconstruction"
 version = "0.0.0"
 description = "Consolidated implementation for atypical-speech voice reconstruction in the SAP setting (Phase 1: VTN-style direct VC + cascaded ASR->TTS)."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = { text = "TBD" }
-dependencies = []
+dependencies = [
+    "numpy",
+    "torch",       # CPU build OK for tests; install via the pytorch cpu index if needed
+    "torchaudio",
+    "soundfile",
+]
 
 [project.optional-dependencies]
-# Filled in per model family as Issues progress; kept empty in the Issue 1 scaffold.
-dev = []
+dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 include = ["sap*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
