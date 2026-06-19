@@ -35,6 +35,17 @@ def test_forward_with_padding_lengths():
     assert torch.isfinite(out["mel_after"]).all()
 
 
+def test_inference_autoregressive():
+    """Free-running decode returns [1, T<=max_len, n_mels] and stops/caps cleanly."""
+    torch.manual_seed(0)
+    m = _tiny()
+    out = m.inference(torch.randn(1, 9, NMELS), max_len=20)
+    assert out["mel_after"].shape[0] == 1 and out["mel_after"].shape[2] == NMELS
+    assert 1 <= out["mel_after"].shape[1] <= 20
+    assert out["n_frames"] == out["mel_after"].shape[1]
+    assert torch.isfinite(out["mel_after"]).all()
+
+
 def test_backward_reaches_all_heads():
     torch.manual_seed(0)
     m = _tiny()

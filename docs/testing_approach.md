@@ -51,11 +51,13 @@ Three approved short Parkinson's command utterances ("Turn on heat.", "What's th
 
 ## Listenable proof-of-life
 
-`scripts/vtn_overfit_demo.py` overfits the fixture and renders, per pair, the original source,
-the target mel, and the model's predicted mel through the **Griffin-Lim baseline vocoder**
-(`sap/data/vocoder.py`) into `/projects/aanchan/vtn_listen/overfit/`. Compare `*_pred_GL` vs
-`*_target_GL` (same vocoder) — that isolates "did the model fit the mel" from Griffin-Lim's own
-quality. A neural vocoder (HiFi-GAN) is a later upgrade (Issue 9).
+Learnability is gated by the `test_vtn_real.py` overfit test (no audio). To actually *hear* a
+trained model, `scripts/infer_vtn.py` loads a checkpoint and renders, per source utterance, the
+original source, the target mel, a teacher-forced reconstruction, and a free-running synthesis —
+all through the **Griffin-Lim baseline vocoder** (`sap/data/vocoder.py`). Compare
+`*_synth_free_GL` vs `*_target_GL` (same vocoder) to isolate the model from Griffin-Lim's own
+quality; `*_recon_tf_GL` is the teacher-forced best case. A neural vocoder (HiFi-GAN) is a
+follow-up upgrade.
 
 ## Running
 

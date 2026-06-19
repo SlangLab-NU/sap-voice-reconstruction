@@ -1,8 +1,29 @@
-"""Tests for the Griffin-Lim baseline vocoder."""
+"""Tests for the vocoder interface, Griffin-Lim baseline, and HiFi-GAN scaffold."""
+import pytest
 import torch
 
 from sap.data.features import MelConfig
-from sap.data.vocoder import GriffinLimVocoder
+from sap.data.vocoder import GriffinLimVocoder, build_vocoder
+
+
+def test_build_vocoder_griffinlim_default():
+    v = build_vocoder("griffinlim")
+    assert isinstance(v, GriffinLimVocoder) and v.sample_rate == 24000
+
+
+def test_build_vocoder_hifigan_requires_checkpoint():
+    with pytest.raises(ValueError):
+        build_vocoder("hifigan")
+
+
+def test_hifigan_scaffold_raises_until_implemented():
+    with pytest.raises(NotImplementedError):
+        build_vocoder("hifigan", checkpoint="/nonexistent.pt")
+
+
+def test_build_vocoder_unknown_name():
+    with pytest.raises(ValueError):
+        build_vocoder("nope")
 
 
 def test_vocoder_logmel_to_waveform_shape():

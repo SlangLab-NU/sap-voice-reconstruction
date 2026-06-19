@@ -123,3 +123,36 @@ class VTN(nn.Module):
         attn = self.dec_layers[-1].last_attn  # [B, T_tgt, T_src]
         return {"mel_before": mel_before, "mel_after": mel_after,
                 "stop_logits": stop_logits, "attn": attn}
+
+    @torch.no_grad()
+    def inference(self, src_mel: Tensor, max_len: int = 1000,
+                  stop_threshold: float = 0.5) -> Dict[str, Tensor]:
+        """Free-running synthesis from a single source mel ``[1, T_src, n_mels]``.
+
+        Autoregressive: encode the source once, then predict the target mel frame-by-frame
+        (Tacotron-style — feed the predicted pre-postnet frame back through the prenet),
+        stopping when the stop-token fires or ``max_len`` is hit. Postnet is applied once to
+        the full sequence. Returns ``mel_after [1, T_gen, n_mels]``, ``attn``, ``n_frames``.
+        """
+        self.eval()
+        device = src_mel.device
+        memory = self.encoder(self.enc_pos(self.encoder_proj(src_mel)))
+        n = self.config.n_mels
+        generated = src_mel.new_zeros(src_mel.size(0), 1, n)  # go-frame
+        frames = []
+        for _ in range(max_len):
+            h = self.dec_pos(self.dec_proj(self.prenet(generated)))
+            T = h.size(1)
+            causal = torch.triu(torch.ones(T, T, dtype=torch.bool, device=device), diagonal=1)
+            for layer in self.dec_layers:
+                h = layer(h, memory, tgt_mask=causal)
+            last = h[:, -1:, :]
+            frame = self.mel_out(last)
+            frames.append(frame)
+            generated = torch.cat([generated, frame], dim=1)
+            if torch.sigmoid(self.stop_out(last)).item() > stop_threshold:
+                break
+        mel_before = torch.cat(frames, dim=1)
+        mel_after = mel_before + self.postnet(mel_before)
+        return {"mel_after": mel_after, "attn": self.dec_layers[-1].last_attn,
+                "n_frames": mel_before.size(1)}

@@ -50,7 +50,8 @@ class VTNManifestDataset(Dataset):
     def __init__(self, manifest_dir: Union[str, Path] = DEFAULT_MANIFEST_DIR,
                  split: str = "train", mel: Optional[MelConfig] = None,
                  ids: Optional[Sequence[str]] = None,
-                 max_duration: Optional[float] = None):
+                 max_duration: Optional[float] = None,
+                 etiologies: Optional[Sequence[str]] = None):
         src_cuts, tgt_cuts = load_pair_cutsets(manifest_dir, split)
         self._src: Dict[str, object] = {c.id: c for c in src_cuts}
         self._tgt: Dict[str, object] = {c.id: c for c in tgt_cuts}
@@ -60,6 +61,10 @@ class VTNManifestDataset(Dataset):
             ids = [i for i in ids
                    if self._src[i].duration <= max_duration
                    and self._tgt[i].duration <= max_duration]
+        if etiologies is not None:  # keep only these source etiologies (human form, e.g. "Stroke")
+            ets = set(etiologies)
+            ids = [i for i in ids
+                   if (self._src[i].supervisions[0].custom or {}).get("etiology") in ets]
         self.ids: List[str] = list(ids)
         self.mel = MelExtractor(mel or VTN_MEL)
 
