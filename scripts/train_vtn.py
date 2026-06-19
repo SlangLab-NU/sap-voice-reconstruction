@@ -37,6 +37,9 @@ def main():
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="auto")
+    p.add_argument("--resume", default="auto", help='"auto" (latest.pt), "none", or a path')
+    p.add_argument("--max-duration", type=float, default=None,
+                   help="drop pairs longer than this many seconds (avoid OOM)")
     p.add_argument("--max-train-ids", type=int, default=None)
     p.add_argument("--max-val-ids", type=int, default=None)
     # model size
@@ -56,7 +59,8 @@ def main():
         weight_decay=args.weight_decay, grad_clip=args.grad_clip, max_steps=args.max_steps,
         log_every=args.log_every, val_every=args.val_every, ckpt_every=args.ckpt_every,
         val_batches=args.val_batches, num_workers=args.num_workers, seed=args.seed,
-        device=args.device, max_train_ids=args.max_train_ids, max_val_ids=args.max_val_ids,
+        device=args.device, resume=args.resume, max_duration=args.max_duration,
+        max_train_ids=args.max_train_ids, max_val_ids=args.max_val_ids,
     )
     exp = train(cfg)
     print(f"\nDone -> {exp}")

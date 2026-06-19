@@ -49,12 +49,17 @@ class VTNManifestDataset(Dataset):
 
     def __init__(self, manifest_dir: Union[str, Path] = DEFAULT_MANIFEST_DIR,
                  split: str = "train", mel: Optional[MelConfig] = None,
-                 ids: Optional[Sequence[str]] = None):
+                 ids: Optional[Sequence[str]] = None,
+                 max_duration: Optional[float] = None):
         src_cuts, tgt_cuts = load_pair_cutsets(manifest_dir, split)
         self._src: Dict[str, object] = {c.id: c for c in src_cuts}
         self._tgt: Dict[str, object] = {c.id: c for c in tgt_cuts}
         if ids is None:
             ids = sorted(self._src.keys() & self._tgt.keys())
+        if max_duration is not None:  # drop very long utts (O(T^2) attention -> OOM)
+            ids = [i for i in ids
+                   if self._src[i].duration <= max_duration
+                   and self._tgt[i].duration <= max_duration]
         self.ids: List[str] = list(ids)
         self.mel = MelExtractor(mel or VTN_MEL)
 
@@ -103,7 +108,8 @@ def collate_vtn(batch: List[Dict]) -> Dict:
 def make_dataloader(manifest_dir: Union[str, Path] = DEFAULT_MANIFEST_DIR,
                     split: str = "train", batch_size: int = 8, shuffle: bool = True,
                     num_workers: int = 0, mel: Optional[MelConfig] = None,
-                    ids: Optional[Sequence[str]] = None) -> DataLoader:
-    ds = VTNManifestDataset(manifest_dir, split, mel=mel, ids=ids)
+                    ids: Optional[Sequence[str]] = None,
+                    max_duration: Optional[float] = None) -> DataLoader:
+    ds = VTNManifestDataset(manifest_dir, split, mel=mel, ids=ids, max_duration=max_duration)
     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
                       num_workers=num_workers, collate_fn=collate_vtn)
