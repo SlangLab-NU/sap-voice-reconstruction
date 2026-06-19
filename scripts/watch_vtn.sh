@@ -1,16 +1,21 @@
 #!/bin/bash
 # Babysit the VTN training chain: show job status, tail recent loss, and — if the
-# chain has died without finishing — resubmit it. Safe to run on a loop / via watch.
+# chain has died without finishing — resubmit it.
 #
-#   bash scripts/watch_vtn.sh                 # one status report
-#   watch -n 60 bash scripts/watch_vtn.sh     # live
-#   RESURRECT=1 bash scripts/watch_vtn.sh     # also resubmit if dead & not DONE
+#   bash scripts/watch_vtn.sh                  # one status report
+#   bash scripts/watch_vtn.sh 300              # loop every 300s (Ctrl-C to stop)
+#   RESURRECT=1 bash scripts/watch_vtn.sh 300  # loop AND resubmit if dead & not DONE
+#   # persistent, survives logout:
+#   nohup env RESURRECT=1 VTN_JOB=vtn_train_mg VTN_SLURM=.../train_vtn_multigpu.slurm \
+#         bash scripts/watch_vtn.sh 300 > "$VTN_EXP/babysit.log" 2>&1 &
 set -uo pipefail
 
-JOB=vtn_train
-EXP=${VTN_EXP:-/projects/aanchan/exp/vtn_run1}
-SELF=/projects/aanchan/sap-voice-reconstruction/cluster/slurm/train_vtn.slurm
+JOB=${VTN_JOB:-vtn_train_mg}
+EXP=${VTN_EXP:-/projects/aanchan/exp/vtn_mg_run1}
+SELF=${VTN_SLURM:-/projects/aanchan/sap-voice-reconstruction/cluster/slurm/train_vtn_multigpu.slurm}
+INTERVAL=${1:-0}   # 0 = single report; >0 = loop every N seconds
 
+report() {
 echo "=== $(date) ==="
 echo "--- squeue (${JOB}) ---"
 squeue --name="$JOB" -o "%.10i %.12j %.8T %.10M %.12l %R" 2>/dev/null
@@ -36,4 +41,15 @@ if [ "$running" -eq 0 ] && [ "$done" -eq 0 ]; then
   else
     echo ">> rerun with RESURRECT=1 to resubmit, or: sbatch $SELF"
   fi
+fi
+}
+
+if [ "$INTERVAL" -gt 0 ] 2>/dev/null; then
+  while true; do
+    report
+    [ -f "$EXP/DONE" ] && { echo "DONE — stopping babysitter."; break; }
+    sleep "$INTERVAL"
+  done
+else
+  report
 fi
