@@ -125,17 +125,18 @@ These map onto the planning README's canonical adapter schema (`utt_id`, `speake
 
 These need a decision or verification before/while building Issues 3–6:
 
-1. **No Lhotse manifests exist yet.** Step 6 has not been run on the 2026-04-08 data; Step 3 is
-   still in progress (DEV partial; TRAIN pending) and Step 4 (WER) feeds Step 5/6. So the VC and
-   cascaded adapters should target the **`speaker_pairs_*.csv` contract first** and treat the
-   manifest contract as forthcoming. Confirm the manifest **output directory** convention when
-   Step 6 runs (upstream takes `--output-dir`; pick our canonical location, likely
-   `data/foundation/lhotse/`).
+1. **RESOLVED — Lhotse manifests are built** (2026-06-17) at `/projects/aanchan/data/manifests/`:
+   `sap_{recordings,supervisions}_{train,val,test}_{source,target}.jsonl.gz`. Verified against
+   this contract (recording `id` = `<speaker>_<stem>`, text in supervisions, source 16 kHz /
+   target 24 kHz, `custom.etiology` source-only). Counts: train 244,727 pairs / 639 spk, val
+   41,968 / 108, test 47,781 / 123. The VTN data path now consumes these via
+   `sap/data/manifest.py` (join source/target 1:1 by `id`). Pairs-CSV path is retired.
 2. **`normalized_text` and `phonemes` are not produced upstream.** The foundation gives raw +
    lightly-cleaned `transcript` only. Text normalization and phonemization are **our** Step-3
    (Issue 3) responsibility — decide the normalizer/phonemizer and whether to reuse VallE's.
-3. **No explicit TEST split.** DEV is reused as test. Decide whether Phase 1 needs a held-out
-   test partition or whether DEV-as-test is acceptable for the baseline study.
+3. **RESOLVED — split terminology.** `train`/`val`/`test` manifests where **val = held out from
+   SAP TRAIN** and **test = SAP DEV**; UASpeech is a separate zero-shot cross-corpus test (not in
+   these manifests). Val speakers are carved from TRAIN with no train/val speaker overlap.
 4. **Etiology string vs. directory form.** CSVs/manifests use human form ("Parkinson's Disease");
    directories use slugged form ("Parkinsons_Disease"). Adapters that walk directories must apply
    the same slugging (spaces→`_`, drop apostrophes); don't assume the CSV value matches a path.

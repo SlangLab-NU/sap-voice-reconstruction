@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 FIXTURES = Path(__file__).parent / "fixtures"
+MANIFEST_DIR = Path("/projects/aanchan/data/manifests")
 
 
 def _load_manifest():
@@ -33,3 +34,23 @@ def vtn_pairs():
     if not resolved:
         pytest.skip("VTN fixture audio missing (tests/fixtures/audio/*.wav) — real-data tests skipped")
     return resolved
+
+
+@pytest.fixture(scope="session")
+def manifest_dir():
+    """SAP Lhotse manifest dir; skips if the manifests or lhotse are absent."""
+    if not (MANIFEST_DIR / "sap_recordings_val_source.jsonl.gz").exists():
+        pytest.skip("SAP Lhotse manifests not present — manifest tests skipped")
+    try:
+        import lhotse  # noqa: F401
+    except ImportError:
+        pytest.skip("lhotse not installed — manifest tests skipped")
+    return MANIFEST_DIR
+
+
+@pytest.fixture(scope="session")
+def val_cutsets(manifest_dir):
+    """Loaded once: (source_cuts, target_cuts) for the val split."""
+    from sap.data.manifest import load_pair_cutsets
+
+    return load_pair_cutsets(manifest_dir, "val")

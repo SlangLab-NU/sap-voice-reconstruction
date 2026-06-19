@@ -14,6 +14,8 @@ dependencies = [
     "torch",       # CPU build OK for tests; install via the pytorch cpu index if needed
     "torchaudio",
     "soundfile",
+    "lhotse",      # SAP Step-6 manifest data path (sap/data/manifest.py)
+    "urllib3",     # lhotse import dependency not always pulled transitively
 ]
 
 [project.optional-dependencies]
