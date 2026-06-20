@@ -64,7 +64,10 @@ class VTNLoss(nn.Module):
         )
 
         if attn is not None:
-            guided = guided_attention_loss(attn, ilens, olens, self.guided_sigma)
+            # attn is at the decoder's (reduced) frame rate -> scale target lengths by r
+            r = out.get("reduction", 1)
+            o_red = torch.ceil(olens.to(device).float() / r).long() if r > 1 else olens
+            guided = guided_attention_loss(attn, ilens, o_red, self.guided_sigma)
         else:
             guided = torch.zeros((), device=device)
 

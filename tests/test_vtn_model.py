@@ -1,4 +1,6 @@
 """Synthetic shape/contract guards for the VTN model (fast, no data, run everywhere)."""
+import math
+
 import torch
 
 from sap.models.vc.vtn.model import VTN, VTNConfig
@@ -21,8 +23,9 @@ def test_forward_contract_unequal_lengths():
     assert out["mel_before"].shape == (B, Tt, NMELS)
     assert out["mel_after"].shape == (B, Tt, NMELS)
     assert out["stop_logits"].shape == (B, Tt)
-    assert out["attn"].shape == (B, Tt, Ts)
-    assert all(torch.isfinite(v).all() for v in out.values())
+    # attn is at the reduced decoder rate: ceil(Tt / r)
+    assert out["attn"].shape == (B, math.ceil(Tt / m.config.reduction_factor), Ts)
+    assert all(torch.isfinite(v).all() for v in out.values() if torch.is_tensor(v))
 
 
 def test_forward_with_padding_lengths():

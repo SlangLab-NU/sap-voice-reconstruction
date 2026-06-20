@@ -5,6 +5,8 @@
   the encoder-decoder attention *diagonalizes* — i.e. the model genuinely learns, rather
   than merely running a step without error.
 """
+import math
+
 import torch
 import torch.nn.functional as F
 
@@ -35,7 +37,7 @@ def test_real_pair_forward(vtn_pairs):
         t = ext.from_wav(p["target"]).unsqueeze(0)
         out = model(s, t)
         assert out["mel_after"].shape == t.shape
-        assert out["attn"].shape == (1, t.shape[1], s.shape[1])
+        assert out["attn"].shape == (1, math.ceil(t.shape[1] / model.config.reduction_factor), s.shape[1])
         assert torch.isfinite(out["mel_after"]).all()
 
 

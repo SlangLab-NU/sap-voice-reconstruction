@@ -48,11 +48,13 @@ def main():
     p.add_argument("--enc-layers", type=int, default=VTNConfig.num_encoder_layers)
     p.add_argument("--dec-layers", type=int, default=VTNConfig.num_decoder_layers)
     p.add_argument("--ffn", type=int, default=VTNConfig.dim_feedforward)
+    p.add_argument("--reduction-factor", type=int, default=VTNConfig.reduction_factor,
+                   help="mel frames predicted per decoder step (r>1 curbs exposure bias)")
     args = p.parse_args()
 
     model = VTNConfig(d_model=args.d_model, nhead=args.nhead,
                       num_encoder_layers=args.enc_layers, num_decoder_layers=args.dec_layers,
-                      dim_feedforward=args.ffn)
+                      dim_feedforward=args.ffn, reduction_factor=args.reduction_factor)
     cfg = TrainConfig(
         manifest_dir=args.manifest_dir, train_split=args.train_split, val_split=args.val_split,
         exp_dir=args.exp_dir, model=model, batch_size=args.batch_size, lr=args.lr,

@@ -1,4 +1,6 @@
 """Tests for the Lhotse-manifest VTN data path (skip if manifests/lhotse absent)."""
+import math
+
 import torch
 
 from sap.data.manifest import VTNManifestDataset, collate_vtn, make_dataloader
@@ -45,5 +47,5 @@ def test_dataloader_feeds_model(manifest_dir, val_cutsets):
     out = model(batch["src_mel"], batch["tgt_mel"], batch["src_lens"], batch["tgt_lens"])
     Tt, Ts = batch["tgt_mel"].shape[1], batch["src_mel"].shape[1]
     assert out["mel_after"].shape == (3, Tt, 80)
-    assert out["attn"].shape == (3, Tt, Ts)
+    assert out["attn"].shape == (3, math.ceil(Tt / model.config.reduction_factor), Ts)
     assert torch.isfinite(out["mel_after"]).all()

@@ -9,10 +9,16 @@ head. The encoder/decoder/attention come from the shared :mod:`sap.models.backbo
 **Forward contract** (``batch_first``, all mels are log-mel ``[B, T, n_mels]``):
 
     out = model(src_mel, tgt_mel, src_lens=None, tgt_lens=None)
-    out["mel_before"]  # [B, T_tgt, n_mels]  pre-postnet prediction
-    out["mel_after"]   # [B, T_tgt, n_mels]  mel_before + postnet residual
-    out["stop_logits"] # [B, T_tgt]          end-of-sequence logit per frame
-    out["attn"]        # [B, T_tgt, T_src]   last-layer encoder-decoder attention
+    out["mel_before"]  # [B, T_tgt, n_mels]      pre-postnet prediction (full resolution)
+    out["mel_after"]   # [B, T_tgt, n_mels]      mel_before + postnet residual
+    out["stop_logits"] # [B, T_tgt]              end-of-sequence logit per frame
+    out["attn"]        # [B, ceil(T_tgt/r), T_src] last-layer enc-dec attn (reduced rate)
+    out["reduction"]   # int r
+
+The decoder runs at a **reduced frame rate** (``reduction_factor`` r): each decoder step
+predicts r mel frames at once, so the autoregressive sequence is r× shorter — this cuts
+error accumulation (exposure bias) that otherwise muffles the back half of free-running
+synthesis, and speeds up train/inference. mel/stop are returned at full resolution.
 
 Source and target are **not** frame-aligned (atypical source is generally longer) — the
 encoder-decoder cross-attention learns the mapping; nothing here assumes T_src == T_tgt.
@@ -23,6 +29,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 from sap.models.backbone import (
@@ -47,6 +54,7 @@ class VTNConfig:
     postnet_channels: int = 512
     postnet_layers: int = 5
     norm_first: bool = True
+    reduction_factor: int = 2  # mel frames predicted per decoder step (r=1 => frame-by-frame)
 
 
 def _pad_mask(lengths: Optional[Tensor], max_len: int, device) -> Optional[Tensor]:
@@ -84,45 +92,53 @@ class VTN(nn.Module):
             for _ in range(c.num_decoder_layers)
         )
 
-        # --- output heads ---
-        self.mel_out = nn.Linear(c.d_model, c.n_mels)
-        self.stop_out = nn.Linear(c.d_model, 1)
+        # --- output heads (each reduced-rate step emits r frames) ---
+        self.r = c.reduction_factor
+        self.mel_out = nn.Linear(c.d_model, c.n_mels * self.r)
+        self.stop_out = nn.Linear(c.d_model, self.r)
         self.postnet = Postnet(c.n_mels, c.postnet_channels, n_layers=c.postnet_layers)
-
-    def _shift_right(self, tgt_mel: Tensor) -> Tensor:
-        """Prepend an all-zero go-frame and drop the last frame (teacher forcing input)."""
-        B, _, n = tgt_mel.shape
-        go = tgt_mel.new_zeros(B, 1, n)
-        return torch.cat([go, tgt_mel[:, :-1, :]], dim=1)
 
     def forward(self, src_mel: Tensor, tgt_mel: Tensor,
                 src_lens: Optional[Tensor] = None,
                 tgt_lens: Optional[Tensor] = None) -> Dict[str, Tensor]:
         device = src_mel.device
-        T_src, T_tgt = src_mel.size(1), tgt_mel.size(1)
+        r, n = self.r, self.config.n_mels
+        B, T_src = src_mel.size(0), src_mel.size(1)
+        T_tgt = tgt_mel.size(1)
         src_pad = _pad_mask(src_lens, T_src, device)
-        tgt_pad = _pad_mask(tgt_lens, T_tgt, device)
 
         # encode source
         memory = self.encoder(self.enc_pos(self.encoder_proj(src_mel)),
                               src_key_padding_mask=src_pad)
 
-        # decode (teacher forced) with a causal self-attention mask
-        dec_in = self.dec_pos(self.dec_proj(self.prenet(self._shift_right(tgt_mel))))
-        # bool causal mask (True = disallowed) — same dtype as the key-padding masks
-        causal = torch.triu(torch.ones(T_tgt, T_tgt, dtype=torch.bool, device=device), diagonal=1)
+        # pad target to a multiple of r, group into reduced-rate frames
+        pad = (r - T_tgt % r) % r
+        tgt_p = F.pad(tgt_mel, (0, 0, 0, pad)) if pad else tgt_mel
+        T_pad = tgt_p.size(1)
+        T_dec = T_pad // r
+        # decoder input at step t = last GT frame of group t-1 (go-frame for t=0)
+        last_per_group = tgt_p.view(B, T_dec, r, n)[:, :, -1, :]  # [B, T_dec, n]
+        go = tgt_mel.new_zeros(B, 1, n)
+        dec_in_frames = torch.cat([go, last_per_group[:, :-1, :]], dim=1)
+
+        dec_lens = torch.ceil(tgt_lens.to(device).float() / r).long() if tgt_lens is not None else None
+        tgt_pad = _pad_mask(dec_lens, T_dec, device)
+
+        dec_in = self.dec_pos(self.dec_proj(self.prenet(dec_in_frames)))
+        causal = torch.triu(torch.ones(T_dec, T_dec, dtype=torch.bool, device=device), diagonal=1)
         h = dec_in
         for layer in self.dec_layers:
             h = layer(h, memory, tgt_mask=causal,
                       tgt_key_padding_mask=tgt_pad,
                       memory_key_padding_mask=src_pad)
 
-        mel_before = self.mel_out(h)
+        # expand r frames/step back to full resolution, then trim the pad
+        mel_before = self.mel_out(h).view(B, T_pad, n)[:, :T_tgt, :]
         mel_after = mel_before + self.postnet(mel_before)
-        stop_logits = self.stop_out(h).squeeze(-1)
-        attn = self.dec_layers[-1].last_attn  # [B, T_tgt, T_src]
+        stop_logits = self.stop_out(h).reshape(B, T_pad)[:, :T_tgt]
+        attn = self.dec_layers[-1].last_attn  # [B, T_dec, T_src]
         return {"mel_before": mel_before, "mel_after": mel_after,
-                "stop_logits": stop_logits, "attn": attn}
+                "stop_logits": stop_logits, "attn": attn, "reduction": r}
 
     @torch.no_grad()
     def inference(self, src_mel: Tensor, max_len: int = 1000,
@@ -136,23 +152,24 @@ class VTN(nn.Module):
         """
         self.eval()
         device = src_mel.device
+        r, n = self.r, self.config.n_mels
+        B = src_mel.size(0)
         memory = self.encoder(self.enc_pos(self.encoder_proj(src_mel)))
-        n = self.config.n_mels
-        generated = src_mel.new_zeros(src_mel.size(0), 1, n)  # go-frame
-        frames = []
-        for _ in range(max_len):
-            h = self.dec_pos(self.dec_proj(self.prenet(generated)))
+        dec_inputs = src_mel.new_zeros(B, 1, n)  # reduced-rate decoder inputs (go-frame)
+        groups = []
+        for _ in range(max(1, max_len // r)):
+            h = self.dec_pos(self.dec_proj(self.prenet(dec_inputs)))
             T = h.size(1)
             causal = torch.triu(torch.ones(T, T, dtype=torch.bool, device=device), diagonal=1)
             for layer in self.dec_layers:
                 h = layer(h, memory, tgt_mask=causal)
             last = h[:, -1:, :]
-            frame = self.mel_out(last)
-            frames.append(frame)
-            generated = torch.cat([generated, frame], dim=1)
-            if torch.sigmoid(self.stop_out(last)).item() > stop_threshold:
+            group = self.mel_out(last).view(B, r, n)        # r frames this step
+            groups.append(group)
+            dec_inputs = torch.cat([dec_inputs, group[:, -1:, :]], dim=1)  # feed last frame back
+            if torch.sigmoid(self.stop_out(last)).max().item() > stop_threshold:
                 break
-        mel_before = torch.cat(frames, dim=1)
+        mel_before = torch.cat(groups, dim=1)
         mel_after = mel_before + self.postnet(mel_before)
         return {"mel_after": mel_after, "attn": self.dec_layers[-1].last_attn,
                 "n_frames": mel_before.size(1)}
