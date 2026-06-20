@@ -36,8 +36,15 @@ MAX_DURATION=${VTN_MAX_DURATION:-12.0}
 VAL_EVERY=${VTN_VAL_EVERY:-2000}
 CKPT_EVERY=${VTN_CKPT_EVERY:-2000}
 LOG_EVERY=${VTN_LOG_EVERY:-50}
+REDUCTION=${VTN_REDUCTION:-2}
+LAMBDA_STOP=${VTN_LAMBDA_STOP:-5.0}
+POS_WEIGHT=${VTN_POS_WEIGHT:-50.0}
+STOP_WINDOW=${VTN_STOP_WINDOW:-8}
+LAMBDA_GUIDED=${VTN_LAMBDA_GUIDED:-100.0}
+SS_MAX_PROB=${VTN_SS_MAX_PROB:-0.30}
 EXTRA=()
 [ -n "${VTN_MAX_TRAIN_IDS:-}" ] && EXTRA+=(--max-train-ids "$VTN_MAX_TRAIN_IDS")
+[ "${VTN_NO_SS:-0}" = "1" ] && EXTRA+=(--no-scheduled-sampling)
 
 resubmitted=0
 on_usr1() {
@@ -73,6 +80,9 @@ apptainer exec --nv --no-home --cleanenv \
     --max-steps "$MAX_STEPS" \
     --log-every "$LOG_EVERY" --val-every "$VAL_EVERY" --ckpt-every "$CKPT_EVERY" --val-batches 30 \
     --d-model 256 --nhead 4 --enc-layers 4 --dec-layers 4 --ffn 1024 \
+    --reduction-factor "$REDUCTION" \
+    --lambda-stop "$LAMBDA_STOP" --pos-weight "$POS_WEIGHT" --stop-window "$STOP_WINDOW" \
+    --lambda-guided "$LAMBDA_GUIDED" --ss-max-prob "$SS_MAX_PROB" \
     --resume auto "${EXTRA[@]}" &
 wait $!
 echo "[$(date)] training process exited (rc=$?)"
