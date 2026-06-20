@@ -2,7 +2,17 @@
 import json
 
 from sap.models.vc.vtn.model import VTNConfig
-from sap.models.vc.vtn.trainer import TrainConfig, VTNTrainer, train
+from sap.models.vc.vtn.trainer import TrainConfig, VTNTrainer, scheduled_sampling_prob, train
+
+
+def test_scheduled_sampling_schedule():
+    """0 during warmup, linear ramp to max, then capped; disabled => always 0."""
+    cfg = TrainConfig(ss_warmup_steps=100, ss_ramp_steps=100, ss_max_prob=0.3)
+    assert scheduled_sampling_prob(0, cfg) == 0.0
+    assert scheduled_sampling_prob(50, cfg) == 0.0          # warmup
+    assert abs(scheduled_sampling_prob(150, cfg) - 0.15) < 1e-9  # halfway through ramp
+    assert abs(scheduled_sampling_prob(10000, cfg) - 0.3) < 1e-9  # capped
+    assert scheduled_sampling_prob(10000, TrainConfig(ss_enabled=False)) == 0.0
 
 
 def test_trainer_runs_logs_checkpoints_and_learns(manifest_dir, tmp_path):

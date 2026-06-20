@@ -38,6 +38,18 @@ def test_forward_with_padding_lengths():
     assert torch.isfinite(out["mel_after"]).all()
 
 
+def test_forward_scheduled_sampling_runs_and_backprops():
+    """Two-pass scheduled sampling (ss_prob>0) keeps the contract and stays differentiable."""
+    torch.manual_seed(0)
+    m = _tiny()
+    B, Ts, Tt = 2, 9, 13
+    out = m(torch.randn(B, Ts, NMELS), torch.randn(B, Tt, NMELS), ss_prob=0.5)
+    assert out["mel_after"].shape == (B, Tt, NMELS)
+    assert out["stop_logits"].shape == (B, Tt)
+    assert torch.isfinite(out["mel_after"]).all()
+    out["mel_after"].pow(2).mean().backward()  # pass-2 carries gradients
+
+
 def test_inference_autoregressive():
     """Free-running decode returns [1, T<=max_len, n_mels] and stops/caps cleanly."""
     torch.manual_seed(0)

@@ -49,8 +49,19 @@ class TrainConfig:
     num_workers: int = 4
     seed: int = 0
     device: str = "auto"
-    bce_pos_weight: float = 5.0
-    guided_weight: float = 1.0
+    # loss weights (config D defaults: strong stop + effective guided attention)
+    bce_pos_weight: float = 50.0
+    lambda_stop: float = 5.0
+    stop_terminal_window: int = 8
+    guided_weight: float = 100.0
+    # scheduled sampling (two-pass; curbs exposure bias). p ramps after warmup, caps at max.
+    ss_enabled: bool = True
+    ss_warmup_steps: int = 10000
+    ss_ramp_steps: int = 30000
+    ss_max_prob: float = 0.30
+    # free-running validation (checkpoint selection by free-running, not teacher-forced mel)
+    free_val_utts: int = 8
+    free_val_max_len: int = 600
     # resume: "auto" (load exp_dir/checkpoints/latest.pt if present), "none", or a path
     resume: str = "auto"
     # drop pairs whose source or target exceeds this many seconds (None = keep all)
@@ -70,6 +81,14 @@ def _to_device(batch: Dict, device) -> Dict:
     for k in ("src_mel", "tgt_mel", "src_lens", "tgt_lens"):
         batch[k] = batch[k].to(device)
     return batch
+
+
+def scheduled_sampling_prob(step: int, cfg: TrainConfig) -> float:
+    """0 during warmup, then linear ramp to ss_max_prob over ss_ramp_steps."""
+    if not cfg.ss_enabled or step < cfg.ss_warmup_steps:
+        return 0.0
+    ramp = min(1.0, (step - cfg.ss_warmup_steps) / max(1, cfg.ss_ramp_steps))
+    return cfg.ss_max_prob * ramp
 
 
 class VTNTrainer:
@@ -133,10 +152,13 @@ class VTNTrainer:
             self.model = DDP(self._raw, device_ids=[self.local_rank])
         else:
             self.model = self._raw
-        self.crit = VTNLoss(bce_pos_weight=cfg.bce_pos_weight, guided_weight=cfg.guided_weight)
+        self.crit = VTNLoss(bce_pos_weight=cfg.bce_pos_weight, lambda_stop=cfg.lambda_stop,
+                            stop_terminal_window=cfg.stop_terminal_window,
+                            guided_weight=cfg.guided_weight)
         self.opt = torch.optim.Adam(self.model.parameters(), lr=cfg.lr,
                                     weight_decay=cfg.weight_decay)
         self.step = 0
+        self.best_free = float("inf")  # best (lowest) free-running score, for checkpoint selection
         self._maybe_resume()
 
     def _barrier(self):
@@ -180,7 +202,9 @@ class VTNTrainer:
 
     def _run_batch(self, batch, train: bool):
         batch = _to_device(batch, self.device)
-        out = self.model(batch["src_mel"], batch["tgt_mel"], batch["src_lens"], batch["tgt_lens"])
+        ss = scheduled_sampling_prob(self.step, self.cfg) if train else 0.0
+        out = self.model(batch["src_mel"], batch["tgt_mel"], batch["src_lens"], batch["tgt_lens"],
+                         ss_prob=ss)
         loss, stats = self.crit(out, batch["tgt_mel"], batch["tgt_lens"], batch["src_lens"])
         if train:
             self.opt.zero_grad()
@@ -188,7 +212,9 @@ class VTNTrainer:
             if self.cfg.grad_clip:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip)
             self.opt.step()
-        return float(loss.detach()), {k: float(v.detach()) for k, v in stats.items()}
+        stats = {k: float(v.detach()) for k, v in stats.items()}
+        stats["ss_prob"] = ss
+        return float(loss.detach()), stats
 
     @torch.no_grad()
     def validate(self) -> Dict:
@@ -206,12 +232,35 @@ class VTNTrainer:
         self._raw.train()
         return {"step": self.step, "split": "val", "val_loss": tot / max(n, 1)}
 
+    @torch.no_grad()
+    def free_validate(self) -> Dict:
+        """Free-running (autoregressive) decode on a fixed val subset -> length/stop metrics.
+        Checkpoint selection uses this, NOT teacher-forced mel loss (which can keep dropping
+        while free-running stopping silently regresses)."""
+        import statistics
+        self._raw.eval()
+        ds = self.val_loader.dataset
+        m = min(self.cfg.free_val_utts, len(ds))
+        ratios, hits = [], 0
+        for i in range(m):
+            ex = ds[i]
+            src = ex["source_mel"].unsqueeze(0).to(self.device)
+            out = self._raw.inference(src, max_len=self.cfg.free_val_max_len)
+            gen, tgt = out["n_frames"], ex["target_mel"].shape[0]
+            ratios.append(gen / max(tgt, 1))
+            hits += int(gen >= self.cfg.free_val_max_len)
+        self._raw.train()
+        med = statistics.median(ratios) if ratios else 0.0
+        hit_frac = hits / max(m, 1)
+        # lower = better: length close to target AND not hitting the cap (failing to stop)
+        return {"step": self.step, "split": "free", "len_ratio_med": med,
+                "hit_max_frac": hit_frac, "free_score": abs(med - 1.0) + hit_frac}
+
     def save_checkpoint(self, tag: str):
         payload = {"step": self.step, "model": self._raw.state_dict(),
                    "optim": self.opt.state_dict(), "model_config": asdict(self.cfg.model)}
         path = self.exp / "checkpoints" / f"{tag}.pt"
         torch.save(payload, path)
-        torch.save(payload, self.exp / "checkpoints" / "latest.pt")
         return path
 
     def train(self):
@@ -228,14 +277,21 @@ class VTNTrainer:
                 if self.is_main and self.step % self.cfg.log_every == 0:
                     self._log({"step": self.step, "split": "train", "loss": loss,
                                "mel_mse": stats["mel_mse"], "bce": stats["bce"],
-                               "guided": stats["guided"], "sps": self.step / (time.time() - t0)})
+                               "guided": stats["guided"], "ss_prob": stats["ss_prob"],
+                               "sps": self.step / (time.time() - t0)})
                 if self.cfg.val_every and self.step % self.cfg.val_every == 0:
                     if self.is_main:
                         self._log(self.validate())
+                        fr = self.free_validate()
+                        self._log(fr)
+                        if fr["free_score"] < self.best_free:  # checkpoint selection by free-running
+                            self.best_free = fr["free_score"]
+                            self.save_checkpoint("best")
                     self._barrier()
                 if self.cfg.ckpt_every and self.step % self.cfg.ckpt_every == 0:
                     if self.is_main:
                         self.save_checkpoint(f"step_{self.step}")
+                        self.save_checkpoint("latest")
                     self._barrier()
                 if self.step >= self.cfg.max_steps:
                     done = True
@@ -243,6 +299,7 @@ class VTNTrainer:
             epoch += 1
         if self.is_main:
             self.save_checkpoint(f"step_{self.step}")
+            self.save_checkpoint("latest")
             (self.exp / "DONE").write_text(f"step {self.step}\n")  # tells the chain to stop
             self._metrics.close()
             if self._tb is not None:

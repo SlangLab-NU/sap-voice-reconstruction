@@ -50,6 +50,15 @@ def main():
     p.add_argument("--ffn", type=int, default=VTNConfig.dim_feedforward)
     p.add_argument("--reduction-factor", type=int, default=VTNConfig.reduction_factor,
                    help="mel frames predicted per decoder step (r>1 curbs exposure bias)")
+    # scheduled sampling + loss weights (exposure-bias / stop / alignment)
+    p.add_argument("--no-scheduled-sampling", action="store_true")
+    p.add_argument("--ss-max-prob", type=float, default=TrainConfig.ss_max_prob)
+    p.add_argument("--ss-warmup", type=int, default=TrainConfig.ss_warmup_steps)
+    p.add_argument("--ss-ramp", type=int, default=TrainConfig.ss_ramp_steps)
+    p.add_argument("--lambda-stop", type=float, default=TrainConfig.lambda_stop)
+    p.add_argument("--pos-weight", type=float, default=TrainConfig.bce_pos_weight)
+    p.add_argument("--stop-window", type=int, default=TrainConfig.stop_terminal_window)
+    p.add_argument("--lambda-guided", type=float, default=TrainConfig.guided_weight)
     args = p.parse_args()
 
     model = VTNConfig(d_model=args.d_model, nhead=args.nhead,
@@ -63,6 +72,10 @@ def main():
         val_batches=args.val_batches, num_workers=args.num_workers, seed=args.seed,
         device=args.device, resume=args.resume, max_duration=args.max_duration,
         max_train_ids=args.max_train_ids, max_val_ids=args.max_val_ids,
+        ss_enabled=not args.no_scheduled_sampling, ss_max_prob=args.ss_max_prob,
+        ss_warmup_steps=args.ss_warmup, ss_ramp_steps=args.ss_ramp,
+        lambda_stop=args.lambda_stop, bce_pos_weight=args.pos_weight,
+        stop_terminal_window=args.stop_window, guided_weight=args.lambda_guided,
     )
     exp = train(cfg)
     print(f"\nDone -> {exp}")

@@ -100,7 +100,8 @@ class VTN(nn.Module):
 
     def forward(self, src_mel: Tensor, tgt_mel: Tensor,
                 src_lens: Optional[Tensor] = None,
-                tgt_lens: Optional[Tensor] = None) -> Dict[str, Tensor]:
+                tgt_lens: Optional[Tensor] = None,
+                ss_prob: float = 0.0) -> Dict[str, Tensor]:
         device = src_mel.device
         r, n = self.r, self.config.n_mels
         B, T_src = src_mel.size(0), src_mel.size(1)
@@ -117,28 +118,44 @@ class VTN(nn.Module):
         T_pad = tgt_p.size(1)
         T_dec = T_pad // r
         # decoder input at step t = last GT frame of group t-1 (go-frame for t=0)
-        last_per_group = tgt_p.view(B, T_dec, r, n)[:, :, -1, :]  # [B, T_dec, n]
+        gt_last = tgt_p.view(B, T_dec, r, n)[:, :, -1, :]  # [B, T_dec, n]
         go = tgt_mel.new_zeros(B, 1, n)
-        dec_in_frames = torch.cat([go, last_per_group[:, :-1, :]], dim=1)
-
         dec_lens = torch.ceil(tgt_lens.to(device).float() / r).long() if tgt_lens is not None else None
         tgt_pad = _pad_mask(dec_lens, T_dec, device)
 
+        gt_dec_in = torch.cat([go, gt_last[:, :-1, :]], dim=1)
+        if ss_prob and ss_prob > 0.0:
+            # two-pass scheduled sampling (Mihaylova & Martins 2019): pass 1 teacher-forced
+            # (no-grad) to harvest the model's own predicted frames, pass 2 feeds them back.
+            with torch.no_grad():
+                mb1, _, _, _ = self._run_decoder(memory, gt_dec_in, src_pad, tgt_pad, T_dec, T_pad, T_tgt)
+            mb1p = F.pad(mb1, (0, 0, 0, pad)) if pad else mb1
+            pred_last = mb1p.view(B, T_dec, r, n)[:, :, -1, :].detach()  # feed mel_before, detached
+            use_model = torch.rand(B, T_dec, 1, device=device) < ss_prob
+            mixed_last = torch.where(use_model, pred_last, gt_last)
+            dec_in_frames = torch.cat([go, mixed_last[:, :-1, :]], dim=1)
+        else:
+            dec_in_frames = gt_dec_in
+
+        mel_before, mel_after, stop_logits, attn = self._run_decoder(
+            memory, dec_in_frames, src_pad, tgt_pad, T_dec, T_pad, T_tgt)
+        return {"mel_before": mel_before, "mel_after": mel_after,
+                "stop_logits": stop_logits, "attn": attn, "reduction": r}
+
+    def _run_decoder(self, memory, dec_in_frames, src_pad, tgt_pad, T_dec, T_pad, T_tgt):
+        """Run prenet -> decoder -> heads for given (possibly mixed) decoder input frames."""
+        B, n = dec_in_frames.size(0), self.config.n_mels
+        device = dec_in_frames.device
         dec_in = self.dec_pos(self.dec_proj(self.prenet(dec_in_frames)))
         causal = torch.triu(torch.ones(T_dec, T_dec, dtype=torch.bool, device=device), diagonal=1)
         h = dec_in
         for layer in self.dec_layers:
             h = layer(h, memory, tgt_mask=causal,
-                      tgt_key_padding_mask=tgt_pad,
-                      memory_key_padding_mask=src_pad)
-
-        # expand r frames/step back to full resolution, then trim the pad
+                      tgt_key_padding_mask=tgt_pad, memory_key_padding_mask=src_pad)
         mel_before = self.mel_out(h).view(B, T_pad, n)[:, :T_tgt, :]
         mel_after = mel_before + self.postnet(mel_before)
         stop_logits = self.stop_out(h).reshape(B, T_pad)[:, :T_tgt]
-        attn = self.dec_layers[-1].last_attn  # [B, T_dec, T_src]
-        return {"mel_before": mel_before, "mel_after": mel_after,
-                "stop_logits": stop_logits, "attn": attn, "reduction": r}
+        return mel_before, mel_after, stop_logits, self.dec_layers[-1].last_attn
 
     @torch.no_grad()
     def inference(self, src_mel: Tensor, max_len: int = 1000,

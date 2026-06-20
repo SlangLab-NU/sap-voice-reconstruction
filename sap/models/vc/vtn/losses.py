@@ -26,10 +26,13 @@ def _frame_mask(lengths: Tensor, max_len: int, device) -> Tensor:
 
 
 class VTNLoss(nn.Module):
-    def __init__(self, bce_pos_weight: float = 5.0, guided_weight: float = 1.0,
+    def __init__(self, bce_pos_weight: float = 50.0, lambda_stop: float = 5.0,
+                 stop_terminal_window: int = 8, guided_weight: float = 100.0,
                  guided_sigma: float = 0.4):
         super().__init__()
         self.bce_pos_weight = bce_pos_weight
+        self.lambda_stop = lambda_stop
+        self.stop_terminal_window = stop_terminal_window
         self.guided_weight = guided_weight
         self.guided_sigma = guided_sigma
 
@@ -53,11 +56,13 @@ class VTNLoss(nn.Module):
         l1_loss = l1(before) + l1(after)
         l2_loss = mse(before) + mse(after)
 
-        # stop target: 1 from the last valid frame onward, masked to valid frames
+        # stop target: positive over the last `stop_terminal_window` valid frames (denser
+        # supervision than a single terminal frame -> reliable stopping), masked to valid frames
         fmask = _frame_mask(olens, stop_logits.size(1), device)
         stop_t = torch.zeros_like(stop_logits)
+        K = self.stop_terminal_window
         for b, L in enumerate(olens.tolist()):
-            stop_t[b, max(0, L - 1):] = 1.0
+            stop_t[b, max(0, L - K):L] = 1.0
         bce = F.binary_cross_entropy_with_logits(
             stop_logits.masked_select(fmask), stop_t.masked_select(fmask),
             pos_weight=torch.tensor(self.bce_pos_weight, device=device),
@@ -71,7 +76,7 @@ class VTNLoss(nn.Module):
         else:
             guided = torch.zeros((), device=device)
 
-        total = l1_loss + l2_loss + bce + self.guided_weight * guided
+        total = l1_loss + l2_loss + self.lambda_stop * bce + self.guided_weight * guided
         stats = {"l1": l1_loss, "l2": l2_loss, "bce": bce, "guided": guided,
                  "mel_l1": l1(after), "mel_mse": mse(after)}
         return total, stats
