@@ -15,6 +15,7 @@ Runs fine on CPU. Example:
       --out-dir /projects/aanchan/vtn_listen/infer_run1
 """
 import argparse
+import re
 from pathlib import Path
 
 import soundfile as sf
@@ -34,7 +35,9 @@ def load_vtn(checkpoint_path, device="cpu"):
 
 
 def slug(s):
-    return "".join(c if c.isalnum() else "_" for c in s.lower()).strip("_")[:40]
+    s = re.sub(r"[\(\[].*?[\)\]]", "", s)        # drop (disfluencies) / [cues] from the name
+    s = re.sub(r"[^a-z0-9]+", "-", s.lower())     # non-alnum runs -> single hyphen
+    return s.strip("-")[:40] or "utt"
 
 
 def main():
@@ -70,7 +73,7 @@ def main():
         uid, text = ex["id"], ex["text"]
         src = ex["source_mel"].unsqueeze(0).to(args.device)
         tgt = ex["target_mel"].unsqueeze(0).to(args.device)
-        base = f"{i + 1:02d}_{slug(ex['etiology'] or 'na')}_{slug(text)}"
+        base = f"{i + 1:02d}_{slug(ex['etiology'] or 'na')}_{ex['speaker'][:8]}_{slug(text)}"
         print(f"[{i + 1}] {ex['etiology']} | {text!r} | spk {ex['speaker'][:8]} "
               f"(src {src.shape[1]} fr, tgt {tgt.shape[1]} fr)")
 
@@ -79,13 +82,15 @@ def main():
             free = model.inference(src, max_len=args.max_len)  # free-running
         print(f"     free-running produced {free['n_frames']} frames")
 
-        sf.write(out / f"{base}_source.wav", ds._src[uid].load_audio()[0],
+        # ordered 1->4 so a folder sorts in listen order: input -> target -> recon -> output
+        sf.write(out / f"{base}__1-input.wav", ds._src[uid].load_audio()[0],
                  int(ds._src[uid].sampling_rate))
-        sf.write(out / f"{base}_target_GL.wav", voc(ex["target_mel"]).cpu().numpy(), sr)
-        sf.write(out / f"{base}_recon_tf_GL.wav", voc(tf).cpu().numpy(), sr)
-        sf.write(out / f"{base}_synth_free_GL.wav", voc(free["mel_after"][0]).cpu().numpy(), sr)
+        sf.write(out / f"{base}__2-target.wav", voc(ex["target_mel"]).cpu().numpy(), sr)
+        sf.write(out / f"{base}__3-recon-tf.wav", voc(tf).cpu().numpy(), sr)
+        sf.write(out / f"{base}__4-output-free.wav", voc(free["mel_after"][0]).cpu().numpy(), sr)
 
-    print(f"\nDone -> {out}  (compare *_synth_free_GL vs *_target_GL; *_recon_tf_GL = best case)")
+    print(f"\nDone -> {out}\n  __1-input (atypical) -> __2-target (goal) -> __3-recon-tf (best case) "
+          f"-> __4-output-free (real synthesis)")
 
 
 if __name__ == "__main__":
