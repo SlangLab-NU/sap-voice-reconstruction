@@ -55,11 +55,51 @@ flowchart TD
     MEM -. "cross-attn" .-> AUX["Aux ASR decoder<br/>(runs 5–10) — content supervision"]
 ```
 
-**Decoder variant, runs 1–5 (Transformer decoder):** same encoder, but the decoder was a
-content-only cross-attention Transformer (`Prenet → Linear → sine-pos → 4× AttnTransformerDecoderLayer
-→ mel_out + stop_out`) instead of the recurrent LSA stack. It was swapped for the Tacotron2-LSA
-decoder at run6 because content-only cross-attention *parked* on the source and collapsed in
-free-running.
+### Earlier architecture (runs 1–5: Transformer decoder)
+
+Same encoder, but the decoder was a content-only cross-attention Transformer instead of the
+recurrent LSA stack:
+
+```mermaid
+flowchart TD
+    SRC["Source mel — atypical<br/>[B, T_src, 80]"]
+
+    subgraph ENCODER["Transformer Encoder (shared across all runs)"]
+        EP["Linear 80→256  +  sine pos-emb"]
+        EL["4× Transformer encoder layers<br/>d_model=256, heads=4, ff=1024"]
+        EP --> EL
+    end
+
+    SRC --> EP
+    EL --> MEM["memory [B, T_src, 256]"]
+
+    subgraph TDEC["Transformer decoder — content-only cross-attention (runs 1–5)"]
+        PREV["prev mel frame<br/>TF: ground-truth | free: own prediction"]
+        PN["Prenet (256,256), dropout 0.5"]
+        DP["Linear prenet→256  +  sine pos-emb"]
+        DL["4× Transformer decoder layers<br/>masked self-attn + cross-attn over memory"]
+        MO["mel_out → r×80"]
+        SO["stop_out → r"]
+        PREV --> PN --> DP --> DL
+        DL --> MO
+        DL --> SO
+    end
+
+    MEM --> DL
+    MO --> MB["mel_before"]
+    MB --> POST["Postnet — 512ch × 5"]
+    POST --> MA["mel_after [B, T_tgt, 80]"]
+    MA --> VOC["Vocoder → waveform"]
+    MA -. "free-running feedback (autoregressive)" .-> PREV
+    MEM -. "cross-attn (run5 only)" .-> AUX["Aux ASR decoder (run5)"]
+```
+
+**Why it was abandoned at run6:** content-only cross-attention has no location/monotonicity bias,
+so in free-running it *parks* on a fixed source region and the output collapses. That motivated the
+switch to the **location-sensitive (LSA) recurrent decoder** (the diagram above), whose attention
+convolves the cumulative alignment to bias monotonic advancement. Lineage within this variant:
+runs 1–4 had **no** aux ASR head (run5 added it); reduction factor was **r=2** (runs 1–3) then
+**r=1** (runs 4–5).
 
 ### Training losses
 ```mermaid
